@@ -2,43 +2,43 @@
 	"interval_hours": 4,
 	"accounts": [
 		{
-			"account": "tuattruong5@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi1@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong6@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi2@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong3@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi3@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong4@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi4@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong7@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi5@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi6@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong2@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi7@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		},
 		{
-			"account": "tuattruong1@tempmail.id.vn",
-			"password": "Tuat12345",
+			"account": "mi8@tempmail.id.vn",
+			"password": "nvt2005S!",
 			"enabled": true
 		}
 	]
