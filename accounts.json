@@ -1,8 +1,8 @@
 {
-	"interval_hours": 4,
+	"interval_hours": 3.75,
 	"accounts": [
 		{
-			"account": "mi1@tempmail.id.vn",
+			"account": "mi9@tempmail.id.vn",
 			"password": "nvt2005S!",
 			"enabled": true
 		},
@@ -12,7 +12,7 @@
 			"enabled": true
 		},
 		{
-			"account": "mi3@tempmail.id.vn",
+			"account": "mi10@tempmail.id.vn",
 			"password": "nvt2005S!",
 			"enabled": true
 		},

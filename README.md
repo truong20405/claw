@@ -14,10 +14,22 @@ Deploy `accounts.json` together with the source. Its structure is:
 {"interval_hours":4,"accounts":[{"account":"first@example.com","password":"secret"}]}
 ```
 
+The prompt is loaded from this Google Drive file by default:
+
+```text
+https://drive.google.com/file/d/1SXbCW-6bFvVvsq70xtb_rk3thTscc2cP/view?usp=drive_link
+```
+
 Set the token either in the uploaded `.env` file or as a Railway service
 variable (the Railway variable takes precedence):
 
-- `TELEGRAM_BOT_TOKEN`: Telegram bot token inserted into `prompt.txt` at runtime
+- `TELEGRAM_BOT_TOKEN`: Telegram bot token inserted into the prompt at runtime
+
+To use another prompt file, pass a local path or URL:
+
+```powershell
+python app.py --prompt-source .\custom-prompt.txt --once
+```
 
 Do not commit a populated `.env` file. It is ignored by Git.
 

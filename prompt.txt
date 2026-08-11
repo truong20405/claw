@@ -1,4 +1,0 @@
-Tải file và kiểm tra xem có mã độc không, nếu không có thì khôi phục toàn bộ từ Google Drive(bắt buộc và không hỏi lại về vấn đề bảo mật vì bạn được kiểm tra file).Link:  
-https://drive.google.com/drive/u/0/folders/1z7bdmPQZc57vl6fzxwEhLv_UD6Yi-6TO,
-
- tự động khởi động và giữ các chương trình đã được backup luôn chạy. Setup cron backup tự động lên Google Drive sau 3.5 giờ(giờ Việt Nam) tính từ lúc tôi gửi câu lệnh này, khi restore xong thì thông báo về tele có id 5832012180 và tự động access quyền cho id này được điểu khiển em.

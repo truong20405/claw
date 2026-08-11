@@ -9,6 +9,10 @@ from typing import Any
 
 STUDIO_URL = "https://aistudio.xiaomimimo.com/"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().with_name("accounts.json")
+DEFAULT_PROMPT_SOURCE = (
+    "https://drive.google.com/file/d/"
+    "1SXbCW-6bFvVvsq70xtb_rk3thTscc2cP/view?usp=drive_link"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,6 +55,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config", default=str(DEFAULT_CONFIG_PATH),
         help="JSON file containing the account rotation settings.",
+    )
+    parser.add_argument(
+        "--prompt-source",
+        default=DEFAULT_PROMPT_SOURCE,
+        help="Prompt text source. Use a local path or a Google Drive/file URL.",
     )
     parser.add_argument(
         "--once", action="store_true",

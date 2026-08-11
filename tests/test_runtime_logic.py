@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import account_rotation
 import mimo_workflow
@@ -83,6 +83,37 @@ class RuntimeLogicTests(unittest.IsolatedAsyncioTestCase):
             tempmail_flow.extract_otp("Xiaomi security email: 731905"),
             "731905",
         )
+
+    def test_google_drive_prompt_url_is_converted_to_direct_download(self) -> None:
+        url = (
+            "https://drive.google.com/file/d/"
+            "1SXbCW-6bFvVvsq70xtb_rk3thTscc2cP/view?usp=drive_link"
+        )
+
+        self.assertEqual(
+            mimo_workflow.google_drive_download_url(url),
+            "https://drive.google.com/uc?export=download&id="
+            "1SXbCW-6bFvVvsq70xtb_rk3thTscc2cP",
+        )
+
+    def test_load_prompt_reads_url_and_replaces_env_placeholders(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b"hello ${TELEGRAM_BOT_TOKEN}"
+        )
+
+        with (
+            patch("mimo_workflow.time.time", return_value=123.456),
+            patch("mimo_workflow.urlopen", return_value=response) as open_url,
+            patch.dict("mimo_workflow.os.environ", {"TELEGRAM_BOT_TOKEN": "token"}),
+        ):
+            prompt = mimo_workflow.load_prompt("https://example.com/prompt.txt")
+
+        self.assertEqual(prompt, "hello token")
+        request = open_url.call_args.args[0]
+        self.assertIn("_prompt_ts=123456", request.full_url)
+        self.assertEqual(request.headers["Cache-control"], "no-cache")
+        self.assertEqual(request.headers["Pragma"], "no-cache")
 
     async def test_terms_checkbox_is_rechecked_after_click(self) -> None:
         tab = AsyncMock()

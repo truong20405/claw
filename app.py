@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 
 from account_rotation import run_account_session, run_rotation
 from app_config import apply_interval_override, load_rotation_config, parse_args
-from mimo_workflow import PROMPT_PATH, load_prompt
 
 
 async def async_main() -> None:
@@ -19,7 +18,6 @@ async def async_main() -> None:
     config_path = Path(args.config).expanduser().resolve()
     config = load_rotation_config(config_path)
     apply_interval_override(config, args.interval_hours)
-    load_prompt(PROMPT_PATH)
 
     if args.test_rotation:
         if args.keep_open and not args.headless:

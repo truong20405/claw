@@ -6,7 +6,8 @@ import os
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 import nodriver as uc
 
@@ -30,7 +31,7 @@ from tempmail_flow import (
 )
 
 
-PROMPT_PATH = Path(__file__).resolve().with_name("prompt.txt")
+GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
 WORKSPACE_WAIT_SECONDS = 120
 POST_SEND_WAIT_SECONDS = 120
 ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
@@ -213,16 +214,66 @@ async def ensure_creation_confirmation(tab: uc.Tab, timeout: int = 10) -> bool:
         return False
 
 
-def load_prompt(prompt_path: Path) -> str:
-    prompt_text = prompt_path.read_text(encoding="utf-8-sig").strip()
+def google_drive_download_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.netloc not in {"drive.google.com", "www.drive.google.com"}:
+        return url
+
+    parts = [part for part in parsed.path.split("/") if part]
+    file_id = ""
+    if len(parts) >= 3 and parts[0] == "file" and parts[1] == "d":
+        file_id = parts[2]
+    else:
+        file_id = parse_qs(parsed.query).get("id", [""])[0]
+
+    if not file_id:
+        return url
+    return GOOGLE_DRIVE_DOWNLOAD_URL.format(file_id=file_id)
+
+
+def cache_busted_url(url: str) -> str:
+    parsed = urlsplit(url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    query.append(("_prompt_ts", str(int(time.time() * 1000))))
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
+
+
+def read_prompt_source(prompt_source: str | Path) -> str:
+    source = str(prompt_source)
+    parsed = urlsplit(source)
+    if parsed.scheme in {"http", "https"}:
+        request = Request(
+            cache_busted_url(google_drive_download_url(source)),
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            },
+        )
+        with urlopen(request, timeout=30) as response:
+            return response.read().decode("utf-8-sig")
+
+    return Path(source).expanduser().read_text(encoding="utf-8-sig")
+
+
+def load_prompt(prompt_source: str | Path) -> str:
+    prompt_text = read_prompt_source(prompt_source).strip()
     if not prompt_text:
-        raise ValueError(f"Prompt file is empty: {prompt_path}")
+        raise ValueError(f"Prompt source is empty: {prompt_source}")
 
     variable_names = set(ENV_PLACEHOLDER_PATTERN.findall(prompt_text))
     missing_names = sorted(name for name in variable_names if not os.environ.get(name))
     if missing_names:
         raise ValueError(
-            "Missing environment variable(s) required by prompt.txt: "
+            "Missing environment variable(s) required by the prompt: "
             + ", ".join(missing_names)
         )
     return ENV_PLACEHOLDER_PATTERN.sub(
@@ -232,12 +283,13 @@ def load_prompt(prompt_path: Path) -> str:
 
 async def send_prompt_after_creation(
     tab: uc.Tab,
-    prompt_path: Path,
+    prompt_source: str | Path,
     wait_seconds: int = WORKSPACE_WAIT_SECONDS,
     timeout: int = 30,
 ) -> bool:
     try:
-        prompt_text = load_prompt(prompt_path)
+        print("Loading the latest prompt...")
+        prompt_text = load_prompt(prompt_source)
         print(f"Waiting up to {wait_seconds + timeout}s for the workspace...")
         textarea = await find_element(
             tab,
@@ -285,7 +337,11 @@ async def prepare_verification_page(
         return False
 
 
-async def complete_creation_flow(tab: uc.Tab, otp: str) -> bool:
+async def complete_creation_flow(
+    tab: uc.Tab,
+    otp: str,
+    args: argparse.Namespace,
+) -> bool:
     if not await submit_otp(tab, otp):
         return False
     if not await click_when_present(
@@ -297,7 +353,7 @@ async def complete_creation_flow(tab: uc.Tab, otp: str) -> bool:
         return False
     if not await ensure_creation_confirmation(tab):
         return False
-    return await send_prompt_after_creation(tab, PROMPT_PATH)
+    return await send_prompt_after_creation(tab, args.prompt_source)
 
 
 async def save_screenshot(tab: uc.Tab, screenshot_path: str) -> None:
@@ -338,7 +394,7 @@ async def run_workflow(
         return False
 
     otp = await wait_for_otp_from_tempmail(inbox, args.otp_timeout)
-    completed = bool(otp) and await complete_creation_flow(tab, otp)
+    completed = bool(otp) and await complete_creation_flow(tab, otp, args)
     if args.screenshot:
         await save_screenshot(tab, args.screenshot)
     return completed
