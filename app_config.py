@@ -24,14 +24,7 @@ def parse_args() -> argparse.Namespace:
         "--timeout", type=int, default=30,
         help="Maximum seconds to wait for the page to load.",
     )
-    parser.add_argument(
-        "--stay-seconds", type=int, default=20,
-        help="Seconds to keep the browser open before closing.",
-    )
-    parser.add_argument(
-        "--keep-open", action="store_true",
-        help="Leave Chrome open after the script finishes.",
-    )
+
     parser.add_argument(
         "--headless", action="store_true",
         help="Run Chrome without showing a browser window.",
@@ -40,14 +33,7 @@ def parse_args() -> argparse.Namespace:
         "--screenshot", default="",
         help="Optional path to save a screenshot after the page loads.",
     )
-    parser.add_argument(
-        "--account", default="",
-        help="Xiaomi account email, phone, or ID.",
-    )
-    parser.add_argument(
-        "--password", default="",
-        help="Xiaomi account password.",
-    )
+
     parser.add_argument(
         "--otp-timeout", type=int, default=120,
         help="Maximum seconds to wait for the first email and its OTP.",
@@ -61,14 +47,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PROMPT_SOURCE,
         help="Prompt text source. Use a local path or a Google Drive/file URL.",
     )
-    parser.add_argument(
-        "--once", action="store_true",
-        help="Run one account once instead of continuously rotating accounts.",
-    )
-    parser.add_argument(
-        "--test-rotation", action="store_true",
-        help="Run every enabled account once with no wait, then stop.",
-    )
+
     parser.add_argument(
         "--interval-hours", type=float, default=None,
         help="Override the rotation interval from the config file.",

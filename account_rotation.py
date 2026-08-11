@@ -11,13 +11,7 @@ from nodriver_utils import build_browser, error_summary
 FAILED_CYCLE_BACKOFF_SECONDS = 5 * 60
 
 
-async def keep_browser_available(args: argparse.Namespace) -> None:
-    if args.keep_open and not args.headless:
-        print("Chrome is being kept open. Close it manually when done.")
-        return
-    if not args.headless and args.stay_seconds > 0:
-        print(f"Keeping browser open for {args.stay_seconds} seconds...")
-        await asyncio.sleep(args.stay_seconds)
+
 
 
 async def run_account_session(
@@ -36,13 +30,12 @@ async def run_account_session(
             timeout=max(30, args.timeout),
         )
         completed = await run_workflow(browser, tab, args)
-        await keep_browser_available(args)
         return completed
     except Exception as error:
         print(f"Account session failed: {error_summary(error)}")
         return False
     finally:
-        if browser is not None and not (args.keep_open and not args.headless):
+        if browser is not None:
             try:
                 browser.stop()
             except Exception as error:
@@ -53,25 +46,17 @@ async def run_rotation(
     args: argparse.Namespace,
     accounts: list[dict[str, str]],
     interval_hours: float,
-    max_runs: int | None = None,
 ) -> None:
     interval_seconds = interval_hours * 60 * 60
     account_index = 0
-    runs_completed = 0
     consecutive_failures = 0
     loop = asyncio.get_running_loop()
     next_run = loop.time()
 
-    if max_runs is None:
-        print(
-            f"Continuous rotation started with {len(accounts)} account(s), "
-            f"one account every {interval_hours:g} hour(s)."
-        )
-    else:
-        print(
-            f"Test rotation started: {max_runs} account session(s), "
-            "no wait between accounts."
-        )
+    print(
+        f"Rotation started with {len(accounts)} account(s), "
+        f"one account every {interval_hours:g} hour(s)."
+    )
     print("Press Ctrl+C to stop.")
 
     while True:
@@ -86,11 +71,7 @@ async def run_rotation(
         )
         print(f"Account session {'completed' if completed else 'failed'}: {account}")
 
-        runs_completed += 1
         account_index = (account_index + 1) % len(accounts)
-        if max_runs is not None and runs_completed >= max_runs:
-            print(f"Test rotation finished after {runs_completed} account session(s).")
-            return
 
         if not completed:
             consecutive_failures += 1
