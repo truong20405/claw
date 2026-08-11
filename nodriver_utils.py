@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import time
@@ -9,6 +10,8 @@ from pathlib import Path
 
 import nodriver as uc
 from nodriver.core.config import find_chrome_executable
+
+log = logging.getLogger("claw.browser")
 
 
 CSS = "css"
@@ -52,7 +55,7 @@ def find_chromium_binary() -> str:
 
 async def build_browser(headless: bool) -> uc.Browser:
     browser_path = find_chromium_binary()
-    print(f"Starting nodriver with Chromium: {browser_path} (headless={headless})")
+    log.info("Starting nodriver with Chromium: %s (headless=%s)", browser_path, headless)
     return await uc.start(
         headless=headless,
         browser_executable_path=browser_path,
@@ -155,7 +158,7 @@ async def click_when_present(
     element_name: str,
     timeout: float = 3,
 ) -> bool:
-    print(f"Waiting for '{element_name}'...")
+    log.debug("Waiting for '%s'...", element_name)
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     while time.monotonic() < deadline:
@@ -163,14 +166,14 @@ async def click_when_present(
             remaining = max(0.5, deadline - time.monotonic())
             element = await find_element(tab, locator, min(1.0, remaining))
             await click_element(element)
-            print(f"Clicked '{element_name}'.")
+            log.debug("Clicked '%s'.", element_name)
             await tab.sleep(1)
             return True
         except Exception as error:
             last_error = error
             await asyncio.sleep(0.25)
     summary = error_summary(last_error) if last_error else "Timed out"
-    print(f"Could not click '{element_name}': {summary}")
+    log.warning("Could not click '%s': %s", element_name, summary)
     return False
 
 

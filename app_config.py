@@ -52,6 +52,11 @@ def parse_args() -> argparse.Namespace:
         "--interval-hours", type=float, default=None,
         help="Override the rotation interval from the config file.",
     )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level.",
+    )
     return parser.parse_args()
 
 

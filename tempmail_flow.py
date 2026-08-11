@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import re
 import time
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
 import nodriver as uc
+
+
+log = logging.getLogger("claw.tempmail")
+
 
 from nodriver_utils import (
     CSS,
@@ -64,15 +69,15 @@ async def fill_custom_email(
     username: str,
     timeout: int = 5,
 ) -> bool:
-    print("Waiting for custom mail input...")
+    log.debug("Waiting for custom mail input...")
     try:
         input_element = await find_element(tab, CUSTOM_MAIL_INPUT, timeout)
         await replace_input(input_element, username)
         await set_reactive_value(input_element, username)
-        print(f"Custom mailbox name entered: {username}")
+        log.info("Custom mailbox name entered: %s", username)
         return True
     except Exception as error:
-        print(f"Could not enter the custom mailbox name: {error_summary(error)}")
+        log.warning("Could not enter the custom mailbox name: %s", error_summary(error))
         return False
 
 
@@ -143,10 +148,7 @@ async def wait_for_new_email_otp(
             current_urls = await message_urls(tab)
         except Exception as error:
             if not poll_error_reported:
-                print(
-                    "TempMail inbox could not be read; retrying: "
-                    f"{error_summary(error)}"
-                )
+                log.warning("TempMail inbox could not be read; retrying: %s", error_summary(error))
                 poll_error_reported = True
             await asyncio.sleep(2)
             continue
@@ -161,24 +163,18 @@ async def wait_for_new_email_otp(
                 await refresh_inbox(tab)
             except Exception as error:
                 if not poll_error_reported:
-                    print(
-                        "TempMail refresh failed; polling will continue: "
-                        f"{error_summary(error)}"
-                    )
+                    log.warning("TempMail refresh failed; polling will continue: %s", error_summary(error))
                     poll_error_reported = True
             await asyncio.sleep(2)
             continue
 
         for message_url in new_urls:
             processed_urls.add(message_url)
-            print("New email received. Opening it...")
+            log.info("New email received. Opening it...")
             try:
                 await navigate(tab, message_url, timeout=10)
             except Exception as error:
-                print(
-                    "Could not open the new email; retrying inbox: "
-                    f"{error_summary(error)}"
-                )
+                log.warning("Could not open the new email; retrying inbox: %s", error_summary(error))
                 if time.monotonic() < deadline:
                     try:
                         await navigate(tab, inbox.inbox_url, timeout=10)
@@ -200,10 +196,7 @@ async def wait_for_new_email_otp(
                     await navigate(tab, inbox.inbox_url, timeout=10)
                 except Exception as error:
                     if not poll_error_reported:
-                        print(
-                            "Could not return to the TempMail inbox; retrying: "
-                            f"{error_summary(error)}"
-                        )
+                        log.warning("Could not return to the TempMail inbox; retrying: %s", error_summary(error))
                         poll_error_reported = True
     return None
 
@@ -221,7 +214,7 @@ async def prepare_tempmail_inbox(
     if not username:
         raise ValueError("Cannot create tempmail address: account email is empty.")
 
-    print(f"Mailbox prefix: {username}")
+    log.debug("Mailbox prefix: %s", username)
     tempmail_tab: uc.Tab | None = None
     try:
         tempmail_tab = await asyncio.wait_for(
@@ -249,7 +242,7 @@ async def prepare_tempmail_inbox(
         await tempmail_tab
         inbox_url = tempmail_tab.target.url
         baseline_urls = set(await message_urls(tempmail_tab))
-        print(f"TempMail ready; recorded {len(baseline_urls)} existing email(s).")
+        log.info("TempMail ready; recorded %d existing email(s)", len(baseline_urls))
         await original_tab.bring_to_front()
         return TempMailInbox(
             tab=tempmail_tab,
@@ -258,7 +251,7 @@ async def prepare_tempmail_inbox(
             baseline_message_urls=baseline_urls,
         )
     except Exception as error:
-        print(f"Could not prepare TempMail: {error_summary(error)}")
+        log.warning("Could not prepare TempMail: %s", error_summary(error))
         if tempmail_tab is not None:
             try:
                 await tempmail_tab.close()
@@ -276,13 +269,13 @@ async def close_tempmail_inbox(inbox: TempMailInbox) -> None:
         try:
             await asyncio.wait_for(inbox.tab.close(), timeout=5)
         except Exception as error:
-            print(f"Could not close TempMail cleanly: {error_summary(error)}")
+            log.warning("Could not close TempMail cleanly: %s", error_summary(error))
     finally:
         try:
             await inbox.original_tab.bring_to_front()
-            print("Returned to the login tab.")
+            log.debug("Returned to the login tab.")
         except Exception as error:
-            print(f"Could not restore the login tab: {error_summary(error)}")
+            log.warning("Could not restore the login tab: %s", error_summary(error))
 
 
 async def wait_for_otp_from_tempmail(
@@ -291,12 +284,12 @@ async def wait_for_otp_from_tempmail(
 ) -> str | None:
     try:
         await inbox.tab.bring_to_front()
-        print(f"Waiting for a new email for up to {otp_timeout}s...")
+        log.info("Waiting for a new email for up to %ds...", otp_timeout)
         otp = await wait_for_new_email_otp(inbox, otp_timeout)
-        print("OTP extracted successfully." if otp else "OTP was not received in time.")
+        log.info("OTP extracted successfully." if otp else "OTP was not received in time.")
         return otp
     except Exception as error:
-        print(f"TempMail OTP flow failed: {error_summary(error)}")
+        log.warning("TempMail OTP flow failed: %s", error_summary(error))
         return None
     finally:
         await close_tempmail_inbox(inbox)
