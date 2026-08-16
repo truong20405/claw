@@ -36,38 +36,6 @@ from tempmail_flow import (
 
 
 GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
-import os
-import re
-import time
-from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
-
-import nodriver as uc
-
-log = logging.getLogger("claw.workflow")
-
-from nodriver_utils import (
-    CSS,
-    TEXT,
-    Locator,
-    click_element,
-    click_when_present,
-    error_summary,
-    find_element,
-    replace_input,
-    set_reactive_value,
-    wait_for_attribute,
-    wait_until_loaded,
-)
-from tempmail_flow import (
-    close_tempmail_inbox,
-    prepare_tempmail_inbox,
-    wait_for_otp_from_tempmail,
-)
-
-
-GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
 WORKSPACE_WAIT_SECONDS = 120
 POST_SEND_WAIT_SECONDS = 120
 BUTTON_SETTLE_SECONDS = 2
@@ -78,9 +46,21 @@ TRY_NOW_BUTTON: Locator = (
     TEXT,
     "Try Now",
 )
+ANNOUNCEMENT_CLOSE_BUTTON: Locator = (
+    CSS,
+    "button[data-track-id='claw_announcement_close_btn'], button[class*='close']",
+)
+COOKIE_ACCEPT_BUTTON: Locator = (
+    CSS,
+    "button[data-track-id='cookie_accept_all_btn']",
+)
 CREATE_NOW_BUTTON: Locator = (
     CSS,
     "button[data-track-id='claw_welcome_create_btn']",
+)
+SIGN_IN_NAVBAR_BUTTON: Locator = (
+    CSS,
+    "button[data-track-id='navbar_signin_btn'], a[data-track-id='navbar_signin_btn']",
 )
 TERMS_CHECKBOX: Locator = (CSS, "input.ant-checkbox-input[type='checkbox']")
 ACCOUNT_INPUT: Locator = (CSS, "input.mi-input__input[aria-label='Email/Phone/Xiaomi Account']")
@@ -550,13 +530,19 @@ async def prepare_verification_page(
     account: str,
     password: str,
 ) -> bool:
-    # Try Now no longer exists on the page; skip silently if not found
-    await click_when_present(tab, TRY_NOW_BUTTON, "Try Now", timeout=5)
-    await click_when_present(tab, CREATE_NOW_BUTTON, "Create Now", timeout=15)
+    # Dismiss any announcement popup or cookie consent if present
+    await click_when_present(tab, ANNOUNCEMENT_CLOSE_BUTTON, "Announcement Close", timeout=2)
+    await click_when_present(tab, COOKIE_ACCEPT_BUTTON, "Cookie Accept", timeout=1)
+
+    # Click Create Now or Sign in button
+    create_clicked = await click_when_present(tab, CREATE_NOW_BUTTON, "Create Now", timeout=15)
+    if not create_clicked:
+        await click_when_present(tab, SIGN_IN_NAVBAR_BUTTON, "Navbar Sign in", timeout=5)
+
     # Wait for Xiaomi login page to finish loading before checking checkbox
     log.debug("Waiting for Xiaomi login page to load...")
     try:
-        await wait_until_loaded(tab, timeout=30)
+        await wait_until_loaded(tab, timeout=30, expected_url_contains="account.xiaomi.com")
     except Exception:
         pass  # Best-effort; continue even if timeout
     # Terms checkbox appears on Xiaomi login page
@@ -571,8 +557,10 @@ async def prepare_verification_page(
         log.info("Verification email page is ready.")
         return True
     except Exception as error:
-        current_url = urlsplit(tab.target.url)
-        current_page = f"{current_url.netloc}{current_url.path}"
+        try:
+            current_page = await tab.evaluate("window.location.href", return_by_value=True)
+        except Exception:
+            current_page = tab.target.url
         log.warning("Verification email page was not ready: %s", error_summary(error))
         log.info("Current page after sign-in: %s", current_page)
         return False
@@ -637,9 +625,16 @@ async def run_workflow(
         return False
 
     log.info("Opening: %s", args.url)
-    await wait_until_loaded(tab, args.timeout)
-    log.info("Loaded URL: %s", tab.target.url)
-    log.info("Page title: %s", tab.target.title)
+    expected_domain = urlsplit(args.url).netloc
+    await wait_until_loaded(tab, args.timeout, expected_url_contains=expected_domain or None)
+    try:
+        current_url = await tab.evaluate("window.location.href", return_by_value=True)
+        title = await tab.evaluate("document.title", return_by_value=True)
+    except Exception:
+        current_url = tab.target.url
+        title = tab.target.title
+    log.info("Loaded URL: %s", current_url)
+    log.info("Page title: %s", title)
 
     if not await prepare_verification_page(tab, account, password):
         return False

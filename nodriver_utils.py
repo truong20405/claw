@@ -220,14 +220,25 @@ async def set_reactive_value(element: uc.Element, value: str) -> None:
         raise RuntimeError("The page did not accept the requested input value.")
 
 
-async def wait_until_loaded(tab: uc.Tab, timeout: float) -> None:
+async def wait_until_loaded(
+    tab: uc.Tab,
+    timeout: float,
+    expected_url_contains: str | None = None,
+) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
+            current_url = await tab.evaluate("window.location.href", return_by_value=True)
+            if not current_url or current_url in ("about:blank", "chrome://newtab/"):
+                await asyncio.sleep(0.25)
+                continue
+            if expected_url_contains and expected_url_contains not in current_url:
+                await asyncio.sleep(0.25)
+                continue
             ready_state = await tab.evaluate(
                 "document.readyState", return_by_value=True
             )
-            if ready_state == "complete":
+            if ready_state in ("interactive", "complete"):
                 await find_element(tab, (CSS, "body"), timeout=1)
                 return
         except Exception:
