@@ -2,7 +2,40 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import os
+import re
+import time
+from pathlib import Path
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
+
+import nodriver as uc
+
+log = logging.getLogger("claw.workflow")
+
+from nodriver_utils import (
+    CSS,
+    TEXT,
+    Locator,
+    click_element,
+    click_when_present,
+    error_summary,
+    find_element,
+    replace_input,
+    set_reactive_value,
+    wait_for_attribute,
+    wait_until_loaded,
+)
+from tempmail_flow import (
+    close_tempmail_inbox,
+    prepare_tempmail_inbox,
+    wait_for_otp_from_tempmail,
+)
+
+
+GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
 import os
 import re
 import time
@@ -37,6 +70,8 @@ from tempmail_flow import (
 GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
 WORKSPACE_WAIT_SECONDS = 120
 POST_SEND_WAIT_SECONDS = 120
+BUTTON_SETTLE_SECONDS = 2
+INPUT_FOCUS_SETTLE_SECONDS = 0.5
 ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
 TRY_NOW_BUTTON: Locator = (
@@ -48,15 +83,15 @@ CREATE_NOW_BUTTON: Locator = (
     "button[data-track-id='claw_welcome_create_btn']",
 )
 TERMS_CHECKBOX: Locator = (CSS, "input.ant-checkbox-input[type='checkbox']")
-ACCOUNT_INPUT: Locator = (CSS, "input[name='account']")
-PASSWORD_INPUT: Locator = (CSS, "input[name='password']")
+ACCOUNT_INPUT: Locator = (CSS, "input.mi-input__input[aria-label='Email/Phone/Xiaomi Account']")
+PASSWORD_INPUT: Locator = (CSS, "input.mi-input__input[aria-label='Password'], input[type='password']")
 SIGN_IN_BUTTON: Locator = (
-    TEXT,
-    "Sign in",
+    CSS,
+    "a.mi-button--primary[role='button'], button.mi-button--primary",
 )
 SEND_EMAIL_BUTTON: Locator = (
-    TEXT,
-    "Send",
+    CSS,
+    "button.miui-btn.miui-btn-primary, button[class*='miui-btn-primary']",
 )
 OTP_INPUT: Locator = (CSS, "input[name='ticket'][placeholder='Enter code']")
 OTP_SUBMIT_BUTTON: Locator = (
@@ -79,6 +114,79 @@ SEND_PROMPT_BUTTON: Locator = (
     CSS,
     "button[data-track-id='claw_send_btn']",
 )
+ENABLED_SEND_PROMPT_BUTTON: Locator = (
+    CSS,
+    "button[data-track-id='claw_send_btn']:not([disabled])",
+)
+
+
+def text_chunks(text: str, size: int = 120) -> list[str]:
+    return [text[index : index + size] for index in range(0, len(text), size)]
+
+
+def normalize_textarea_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+async def set_prompt_textarea_value(textarea: uc.Element, prompt_text: str) -> str:
+    encoded_prompt = json.dumps(prompt_text)
+    return await textarea.apply(
+        f"""
+        element => {{
+            const value = {encoded_prompt};
+            element.focus();
+
+            const prototype = HTMLTextAreaElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (!setter) {{
+                throw new Error('HTMLTextAreaElement value setter was not found.');
+            }}
+
+            const previousValue = element.value;
+            setter.call(element, value);
+
+            const tracker = element._valueTracker;
+            if (tracker) {{
+                tracker.setValue(previousValue);
+            }}
+
+            element.dispatchEvent(new InputEvent('input', {{
+                bubbles: true,
+                cancelable: true,
+                data: value,
+                inputType: 'insertText',
+            }}));
+            element.dispatchEvent(new Event('change', {{
+                bubbles: true,
+                cancelable: true,
+            }}));
+
+            return element.value;
+        }}
+        """
+    )
+
+
+async def _js_set_input(element: uc.Element, value: str) -> None:
+    """Set an input value using the browser's native value setter so
+    framework event listeners (Xiaomi login uses a custom framework) pick it up."""
+    encoded = json.dumps(value)
+    await element.apply(
+        f"""
+        element => {{
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            )?.set;
+            if (nativeSetter) {{
+                nativeSetter.call(element, {encoded});
+            }} else {{
+                element.value = {encoded};
+            }}
+            element.dispatchEvent(new Event('input',  {{ bubbles: true }}));
+            element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        }}
+        """
+    )
 
 
 async def fill_login_credentials(
@@ -90,14 +198,14 @@ async def fill_login_credentials(
     log.debug("Waiting for login inputs...")
     try:
         account_input = await find_element(tab, ACCOUNT_INPUT, timeout)
-        await replace_input(account_input, account)
-        account_input = await find_element(tab, ACCOUNT_INPUT, timeout)
-        await set_reactive_value(account_input, account)
+        await click_element(account_input)
+        await account_input.clear_input()
+        await _js_set_input(account_input, account)
 
         password_input = await find_element(tab, PASSWORD_INPUT, timeout)
-        await replace_input(password_input, password)
-        password_input = await find_element(tab, PASSWORD_INPUT, timeout)
-        await set_reactive_value(password_input, password)
+        await click_element(password_input)
+        await password_input.clear_input()
+        await _js_set_input(password_input, password)
         log.info("Login credentials entered.")
         return True
     except Exception as error:
@@ -111,12 +219,13 @@ async def ensure_terms_accepted(tab: uc.Tab, timeout: int = 10) -> bool:
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            checkbox = await find_element(tab, TERMS_CHECKBOX, timeout=1)
+            checkbox = await find_element(tab, TERMS_CHECKBOX, timeout=3)
             checked = await checkbox.apply("element => element.checked === true")
             if checked:
                 log.info("Account terms accepted.")
                 return True
             await click_element(checkbox)
+            await tab.sleep(BUTTON_SETTLE_SECONDS)
         except Exception as error:
             last_error = error
         await asyncio.sleep(0.25)
@@ -140,6 +249,7 @@ async def submit_sign_in(tab: uc.Tab, timeout: int = 10) -> bool:
             raise RuntimeError("The visible Sign in button had no clickable position.")
         await sign_in_button.mouse_click()
         log.info("Sign-in submitted with a trusted mouse event.")
+        await tab.sleep(BUTTON_SETTLE_SECONDS)
 
         await asyncio.sleep(5)
         try:
@@ -185,6 +295,7 @@ async def submit_otp(tab: uc.Tab, otp: str, timeout: int = 10) -> bool:
         submit_button = await find_element(tab, OTP_SUBMIT_BUTTON, timeout)
         await click_element(submit_button)
         log.info("OTP submitted.")
+        await tab.sleep(BUTTON_SETTLE_SECONDS)
         return True
     except Exception as error:
         log.warning("Could not submit the OTP: %s", error_summary(error))
@@ -197,6 +308,7 @@ async def ensure_creation_confirmation(tab: uc.Tab, timeout: int = 10) -> bool:
         checkbox = await find_element(tab, CREATE_CONFIRMATION_CHECKBOX, timeout)
         if checkbox.attrs.get("aria-checked") != "true":
             await click_element(checkbox)
+            await tab.sleep(BUTTON_SETTLE_SECONDS)
             await wait_for_attribute(
                 tab,
                 CREATE_CONFIRMATION_CHECKBOX,
@@ -211,6 +323,7 @@ async def ensure_creation_confirmation(tab: uc.Tab, timeout: int = 10) -> bool:
         continue_button = await find_element(tab, CONTINUE_CREATING_BUTTON, timeout)
         await click_element(continue_button)
         log.info("Clicked 'Continue Creating'.")
+        await tab.sleep(BUTTON_SETTLE_SECONDS)
         return True
     except Exception as error:
         log.warning("Could not confirm creation: %s", error_summary(error))
@@ -286,23 +399,144 @@ def load_prompt(prompt_source: str | Path) -> str:
 
 async def send_prompt_after_creation(
     tab: uc.Tab,
-    prompt_source: str | Path,
+    prompt_text: str,
     wait_seconds: int = WORKSPACE_WAIT_SECONDS,
     timeout: int = 30,
 ) -> bool:
     try:
-        log.debug("Loading the latest prompt...")
-        prompt_text = load_prompt(prompt_source)
-        log.info("Waiting up to %ds for the workspace...", wait_seconds + timeout)
-        textarea = await find_element(
-            tab,
-            PROMPT_TEXTAREA,
-            timeout=wait_seconds + timeout,
+        prompt_text = normalize_textarea_text(prompt_text)
+        log.info("Prompt text: %d character(s).", len(prompt_text))
+
+        # If still on the welcome/home page, click "Create Now" to open workspace
+        log.debug("Checking for 'Create Now' on welcome page before prompt step...")
+        create_now_clicked = await click_when_present(
+            tab, CREATE_NOW_BUTTON, "Create Now (pre-prompt)", timeout=5
         )
-        await set_reactive_value(textarea, prompt_text)
-        send_button = await find_element(tab, SEND_PROMPT_BUTTON, timeout)
-        await click_element(send_button)
-        log.info("Prompt sent.")
+        if create_now_clicked:
+            log.info("Clicked 'Create Now' from welcome page; waiting for confirmation or workspace...")
+            # Handle confirmation dialog if it appears
+            confirmed = await click_when_present(
+                tab, CONTINUE_CREATING_BUTTON, "Continue Creating", timeout=10
+            )
+            if not confirmed:
+                log.debug("No confirmation dialog, continuing to prompt...")
+
+        log.info("Waiting up to %ds for the workspace...", wait_seconds + timeout)
+        deadline = time.monotonic() + wait_seconds + timeout
+        last_error: Exception | None = None
+        attempt = 0
+        while time.monotonic() < deadline:
+            attempt += 1
+            try:
+                remaining = max(1.0, deadline - time.monotonic())
+                log.info(
+                    "Prompt step %d: waiting for textarea (%.0fs left)...",
+                    attempt,
+                    remaining,
+                )
+                textarea = await find_element(tab, PROMPT_TEXTAREA, timeout=remaining)
+                log.info("Prompt step %d: textarea found; focusing...", attempt)
+                await click_element(textarea)
+                await tab.sleep(INPUT_FOCUS_SETTLE_SECONDS)
+                log.info("Prompt step %d: clearing textarea...", attempt)
+                await textarea.clear_input()
+                chunks = text_chunks(prompt_text)
+                log.info(
+                    "Prompt step %d: setting prompt through React textarea setter...",
+                    attempt,
+                )
+                actual_value = await set_prompt_textarea_value(textarea, prompt_text)
+                actual_length = len(actual_value or "")
+                expected_length = len(prompt_text)
+                log.info(
+                    "Prompt step %d: React setter value length is %d/%d.",
+                    attempt,
+                    actual_length,
+                    expected_length,
+                )
+                if actual_value != prompt_text:
+                    log.warning(
+                        "Prompt step %d: React setter mismatch; trying CDP insert_text (%d chunk(s)).",
+                        attempt,
+                        len(chunks),
+                    )
+                    await textarea.clear_input()
+                for chunk_index, chunk in enumerate(chunks, start=1):
+                    if actual_value == prompt_text:
+                        break
+                    await tab.send(uc.cdp.input_.insert_text(chunk))
+                    actual_value = await textarea.apply("element => element.value")
+                    log.info(
+                        "Prompt step %d: chunk %d/%d inserted; value length %d/%d.",
+                        attempt,
+                        chunk_index,
+                        len(chunks),
+                        len(actual_value or ""),
+                        len(prompt_text),
+                    )
+                actual_length = len(actual_value or "")
+                expected_length = len(prompt_text)
+                if prompt_text.startswith(actual_value or ""):
+                    missing_text = prompt_text[actual_length:]
+                    if missing_text:
+                        log.info(
+                            "Prompt step %d: inserting missing tail (%d char(s)).",
+                            attempt,
+                            len(missing_text),
+                        )
+                        await tab.send(uc.cdp.input_.insert_text(missing_text))
+                        actual_value = await textarea.apply("element => element.value")
+                        actual_length = len(actual_value or "")
+                if actual_value != prompt_text:
+                    log.warning(
+                        "Prompt step %d: prompt value mismatch; got %d/%d chars.",
+                        attempt,
+                        actual_length,
+                        expected_length,
+                    )
+                log.info(
+                    "Prompt step %d: textarea value length is %d/%d.",
+                    attempt,
+                    actual_length,
+                    expected_length,
+                )
+                if actual_value != prompt_text:
+                    raise RuntimeError(
+                        "The prompt textarea did not keep the full typed text."
+                    )
+                await find_element(tab, ENABLED_SEND_PROMPT_BUTTON, timeout=5)
+                log.info("Prompt step %d: prompt text accepted by textarea.", attempt)
+                break
+            except Exception as error:
+                last_error = error
+                log.warning(
+                    "Prompt step %d failed; retrying: %s",
+                    attempt,
+                    error_summary(error),
+                )
+                await asyncio.sleep(1)
+        else:
+            summary = error_summary(last_error) if last_error else "Timed out"
+            raise TimeoutError(f"Prompt input did not become ready: {summary}")
+        log.info("Prompt step: pressing Enter to send...")
+        key_options = {
+            "code": "Enter",
+            "key": "Enter",
+            "windows_virtual_key_code": 13,
+            "native_virtual_key_code": 13,
+        }
+        await tab.send(uc.cdp.input_.dispatch_key_event("rawKeyDown", **key_options))
+        await tab.send(
+            uc.cdp.input_.dispatch_key_event(
+                "char",
+                text="\r",
+                unmodified_text="\r",
+                **key_options,
+            )
+        )
+        await tab.send(uc.cdp.input_.dispatch_key_event("keyUp", **key_options))
+        log.info("Prompt sent with Enter.")
+        await tab.sleep(BUTTON_SETTLE_SECONDS)
         log.info("Waiting %ds after sending before closing the browser...", POST_SEND_WAIT_SECONDS)
         await tab.sleep(POST_SEND_WAIT_SECONDS)
         return True
@@ -316,9 +550,17 @@ async def prepare_verification_page(
     account: str,
     password: str,
 ) -> bool:
-    await click_when_present(tab, TRY_NOW_BUTTON, "Try Now", timeout=15)
+    # Try Now no longer exists on the page; skip silently if not found
+    await click_when_present(tab, TRY_NOW_BUTTON, "Try Now", timeout=5)
     await click_when_present(tab, CREATE_NOW_BUTTON, "Create Now", timeout=15)
-    if not await ensure_terms_accepted(tab, timeout=15):
+    # Wait for Xiaomi login page to finish loading before checking checkbox
+    log.debug("Waiting for Xiaomi login page to load...")
+    try:
+        await wait_until_loaded(tab, timeout=30)
+    except Exception:
+        pass  # Best-effort; continue even if timeout
+    # Terms checkbox appears on Xiaomi login page
+    if not await ensure_terms_accepted(tab, timeout=60):
         return False
     if not await fill_login_credentials(tab, account, password, timeout=15):
         return False
@@ -329,7 +571,6 @@ async def prepare_verification_page(
         log.info("Verification email page is ready.")
         return True
     except Exception as error:
-        await tab
         current_url = urlsplit(tab.target.url)
         current_page = f"{current_url.netloc}{current_url.path}"
         log.warning("Verification email page was not ready: %s", error_summary(error))
@@ -340,20 +581,33 @@ async def prepare_verification_page(
 async def complete_creation_flow(
     tab: uc.Tab,
     otp: str,
+    prompt_text: str,
     args: argparse.Namespace,
 ) -> bool:
     if not await submit_otp(tab, otp):
         return False
-    if not await click_when_present(
+
+    # After OTP, two scenarios:
+    # 1. New workspace: "Create Now" button appears → need to click + confirm
+    # 2. Existing workspace: lands directly in chat → skip to send prompt
+    log.info("Checking post-OTP state (new vs existing workspace)...")
+    create_now_clicked = await click_when_present(
         tab,
         CREATE_NOW_BUTTON,
         "Create Now after OTP",
         timeout=10,
-    ):
-        return False
-    if not await ensure_creation_confirmation(tab):
-        return False
-    return await send_prompt_after_creation(tab, args.prompt_source)
+    )
+    if create_now_clicked:
+        log.info("New workspace flow: confirming creation...")
+        confirmed = await ensure_creation_confirmation(tab)
+        if not confirmed:
+            log.info("Confirmation step skipped (workspace may already exist); proceeding to prompt.")
+    else:
+        log.info("Existing workspace detected: skipping creation confirmation.")
+
+    return await send_prompt_after_creation(tab, prompt_text)
+
+
 
 
 async def save_screenshot(tab: uc.Tab, screenshot_path: str) -> None:
@@ -371,9 +625,19 @@ async def run_workflow(
 ) -> bool:
     account = args.account.strip()
     password = args.password
+
+    # Pre-load prompt BEFORE browser actions to avoid blocking the event loop later
+    log.info("Pre-loading prompt from source: %s", args.prompt_source)
+    try:
+        loop = asyncio.get_event_loop()
+        prompt_text = await loop.run_in_executor(None, load_prompt, args.prompt_source)
+        log.info("Prompt pre-loaded: %d character(s).", len(prompt_text))
+    except Exception as exc:
+        log.error("Failed to load prompt: %s", error_summary(exc))
+        return False
+
     log.info("Opening: %s", args.url)
     await wait_until_loaded(tab, args.timeout)
-    await tab
     log.info("Loaded URL: %s", tab.target.url)
     log.info("Page title: %s", tab.target.title)
 
@@ -394,7 +658,7 @@ async def run_workflow(
         return False
 
     otp = await wait_for_otp_from_tempmail(inbox, args.otp_timeout)
-    completed = bool(otp) and await complete_creation_flow(tab, otp, args)
+    completed = bool(otp) and await complete_creation_flow(tab, otp, prompt_text, args)
     if args.screenshot:
         await save_screenshot(tab, args.screenshot)
     return completed

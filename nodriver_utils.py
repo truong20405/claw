@@ -17,6 +17,7 @@ log = logging.getLogger("claw.browser")
 CSS = "css"
 TEXT = "text"
 Locator = tuple[str, str]
+DEFAULT_CLICK_SETTLE_SECONDS = 2.0
 
 
 def error_summary(error: Exception) -> str:
@@ -64,6 +65,12 @@ async def build_browser(headless: bool) -> uc.Browser:
             "--window-size=1440,1000",
             "--disable-notifications",
             "--disable-popup-blocking",
+            # Spoof a modern Windows x64 Chrome UA to avoid "browser too old" blocks
+            (
+                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/137.0.0.0 Safari/537.36"
+            ),
         ],
     )
 
@@ -157,6 +164,7 @@ async def click_when_present(
     locator: Locator,
     element_name: str,
     timeout: float = 3,
+    settle_seconds: float = DEFAULT_CLICK_SETTLE_SECONDS,
 ) -> bool:
     log.debug("Waiting for '%s'...", element_name)
     deadline = time.monotonic() + timeout
@@ -167,7 +175,8 @@ async def click_when_present(
             element = await find_element(tab, locator, min(1.0, remaining))
             await click_element(element)
             log.debug("Clicked '%s'.", element_name)
-            await tab.sleep(1)
+            if settle_seconds > 0:
+                await tab.sleep(settle_seconds)
             return True
         except Exception as error:
             last_error = error
@@ -189,15 +198,19 @@ async def set_reactive_value(element: uc.Element, value: str) -> None:
         f"""
         element => {{
             const value = {encoded_value};
-            const setter = Object.getOwnPropertyDescriptor(
-                Object.getPrototypeOf(element), 'value'
-            ).set;
+            const prototype = Object.getPrototypeOf(element);
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (!setter) {{
+                throw new Error('Element does not expose a value setter.');
+            }}
+            element.focus();
             setter.call(element, value);
             element.dispatchEvent(new InputEvent('input', {{
                 bubbles: true,
                 data: value,
                 inputType: 'insertText',
             }}));
+            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
             element.dispatchEvent(new Event('change', {{ bubbles: true }}));
             return element.value;
         }}
